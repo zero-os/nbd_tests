@@ -2,6 +2,8 @@
 
 tests to see maximum performance of NBD
 
+see https://github.com/zero-os/nbd_tests/tree/master/specs
+
 ## requirements
 
 - install js93
