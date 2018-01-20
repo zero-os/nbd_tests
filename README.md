@@ -40,3 +40,7 @@ js9_node get -i myname
 js9_node ssh -i myname
 
 ```
+
+## remarks
+
+- examples how to use clients in https://docs.grid.tf/despiegk/node_tests
