@@ -176,7 +176,10 @@ def run_fio(cl, device):
 
     while result.running:
         logger.info('waiting for fio test to finish')
-        result.get()
+        try:
+            result.get()
+        except Exception as e:
+            print("error while getting result for fio: %s" % e)
 
     output = result.get()
 
@@ -184,13 +187,19 @@ def run_fio(cl, device):
         raise Exception('fio failed: %s', output.stderr)
 
     logger.info(output.stdout)
-    j.sal.fs.writeFile(j.sal.fs.joinPaths(ROOT, 'baseline-fio.out'), out)
+    j.sal.fs.writeFile(j.sal.fs.joinPaths(ROOT, 'baseline-fio.out'), output.stdout)
 
 
-cl, node, ip = make_node(MACHINE_NAME)
+DEBUG = False
+
+# Create node on packet.net
+if DEBUG:
+    cl, node, ip = make_node(MACHINE_NAME)
+else:
+    # local defined node
+    cl = j.clients.zero_os.get('main')
 
 prepare_node(cl)
-
 # start nbd server
 server = start_base_nbd_server(cl)
 client = start_base_nbd_client(cl, server)
