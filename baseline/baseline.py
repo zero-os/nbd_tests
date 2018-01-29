@@ -19,6 +19,7 @@ NBD_CONFIG = {
     'size': '4G'
 }
 
+logger = j.logger.logging
 # ITSYOUONLINE_APP_ID = 'JNSnQnn-frYqg-8N6IsCQRdY5Hec'
 # ITSYOUONLINE_APP_SECRET = 'Kw7lkYMoQbQH1NWQSujW___X-Lsv'
 # curr_path = abspath(__file__).split(os.sep)
@@ -94,6 +95,7 @@ def run_fio_host(machine):
         raise Exception('failed to start nbd-server: %s' % err)
 
     j.sal.fs.writeFile(j.sal.fs.joinPaths(ROOT, 'host-fio.out'), out)
+    logger.info('Host tests written to %s/host-fio.out' % ROOT)
 
 
 machine = init()
