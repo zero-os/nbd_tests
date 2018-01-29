@@ -22,7 +22,8 @@ VM_FLIST = 'https://hub.gig.tech/gig-official-apps/ubuntu-xenial-bootable.flist'
 FLIST_FIO = 'https://hub.gig.tech/azmy/fio.flist'
 FLIST_TARANTOOL = 'https://hub.gig.tech/azmy/nbd-tarantool.flist'
 FLIST_NBD = 'https://hub.gig.tech/azmy/nbd-3.16.2.flist'
-# FLIST_NBD = 'https://hub.gig.tech/azmy/nbd-3.13.flist'
+FLIST_FIO = 'https://hub.gig.tech/azmy/fio.flist'
+
 
 NBD_SERVER_CONF = 'nbd-server.conf'
 FIO_CONF = 'fio.conf'
@@ -156,6 +157,36 @@ def start_base_nbd_client(cl, server):
     logger.info('NBD-CLIENT JOB ID: %s', result.id)
 
 
+def run_fio(cl, device):
+    tag = 'fio'
+
+    container = make_container(cl, tag, FLIST_FIO, privileged=True)
+
+    config = j.sal.fs.fileGetContents(j.sal.fs.joinPaths(ROOT, FIO_CONF))
+    config = config.format(dev=device)
+
+    dir = '/opt'
+    container.filesystem.mkdir(dir)
+
+    buffer = BytesIO(config.encode())
+    cfg = j.sal.fs.joinPaths(dir, 'fio.conf')
+    container.filesystem.upload(cfg, buffer)
+
+    result = container.system('fio %s' % cfg)
+
+    while result.running:
+        logger.info('waiting for fio test to finish')
+        result.get()
+
+    output = result.get()
+
+    if output.state == 'ERROR':
+        raise Exception('fio failed: %s', output.stderr)
+
+    logger.info(output.stdout)
+    j.sal.fs.writeFile(j.sal.fs.joinPaths(ROOT, 'baseline-fio.out'), out)
+
+
 cl, node, ip = make_node(MACHINE_NAME)
 
 prepare_node(cl)
@@ -163,3 +194,5 @@ prepare_node(cl)
 # start nbd server
 server = start_base_nbd_server(cl)
 client = start_base_nbd_client(cl, server)
+
+fio = run_fio(cl, 'nbd0')
