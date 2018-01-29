@@ -193,7 +193,7 @@ def run_fio(cl, device):
 DEBUG = False
 
 # Create node on packet.net
-if DEBUG:
+if not DEBUG:
     cl, node, ip = make_node(MACHINE_NAME)
 else:
     # local defined node
