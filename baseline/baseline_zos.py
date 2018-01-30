@@ -9,21 +9,19 @@ logger = j.logger.logging
 ROOT = os.path.dirname(os.path.abspath(__file__))
 
 PACKENTNET_INSTANCE = 'main'
+ZEROTIER_INSTANCE = 'main'
+
+FACILITY = 'fra1'
 MACHINE_NAME = 'nbd-baseline'
 RESET = False
-PLAN = 'baremetal_1'
-
-ZT_TOKEN = 'q7sh7dPnbuwN4525YDnjwfGUjAcXCCnW'
-ZTID = '93afae5963f3ebd8'
-
-VM_FLIST = 'https://hub.gig.tech/gig-official-apps/ubuntu-xenial-bootable.flist'
+PLAN = 'baremetal_1e'
 
 # Flists
 FLIST_FIO = 'https://hub.gig.tech/azmy/fio.flist'
 FLIST_TARANTOOL = 'https://hub.gig.tech/azmy/nbd-tarantool.flist'
 FLIST_NBD = 'https://hub.gig.tech/azmy/nbd-3.16.2.flist'
 FLIST_FIO = 'https://hub.gig.tech/azmy/fio.flist'
-
+FLIST_KVM = 'https://hub.gig.tech/azmy/ubuntu-xenial-bootable-sshd.flist'
 
 NBD_SERVER_CONF = 'nbd-server.conf'
 FIO_CONF = 'fio.conf'
@@ -36,8 +34,14 @@ NBD_CONFIG = {
 
 
 def make_node(name):
+    zt = j.clients.zerotier.get(ZEROTIER_INSTANCE)
     cl = j.clients.packetnet.get(PACKENTNET_INSTANCE)
-    zoscl, node, ip = cl.startZeroOS(hostname=name, plan=PLAN, zerotierAPI=ZT_TOKEN, zerotierId=ZTID, remove=RESET)
+    zoscl, node, ip = cl.startZeroOS(
+        hostname=name, plan=PLAN, facility=FACILITY,
+        zerotierAPI=zt.config.data['token_'], zerotierId=zt.config.data['networkID_'],
+        remove=RESET
+    )
+
     return zoscl, node, ip  # expanded for self documentation
 
 
@@ -157,7 +161,7 @@ def start_base_nbd_client(cl, server):
     logger.info('NBD-CLIENT JOB ID: %s', result.id)
 
 
-def run_fio(cl, device):
+def run_host_fio_test(cl, device):
     tag = 'fio'
 
     container = make_container(cl, tag, FLIST_FIO, privileged=True)
@@ -190,18 +194,81 @@ def run_fio(cl, device):
     j.sal.fs.writeFile(j.sal.fs.joinPaths(ROOT, 'baseline-fio.out'), output.stdout)
 
 
+def make_kvm(cl, name, ssh=2222, media=None):
+    vms = cl.kvm.list()
+    if name not in [vm['name'] for vm in vms]:
+        cl.kvm.create(
+            name, media=media,
+            flist=FLIST_KVM,
+            nics=[{'type': 'default'}], port={2222: 22}
+        )
+
+    if not cl.nft.rule_exists(ssh, 'zt0'):
+        cl.nft.open_port(ssh, 'zt0')
+
+    authorized = ''
+    for key in j.clients.ssh.ssh_keys_list_from_agent():
+        pub = j.clients.ssh.SSHKeyGetFromAgentPub(key)
+        authorized += pub + '\n'
+
+    buffer = BytesIO(authorized.encode())
+
+    # make sure key is uploaded
+    path = j.sal.fs.joinPaths('/mnt', name, 'root', '.ssh')
+    cl.filesystem.mkdir(path)
+    cl.filesystem.upload(j.sal.fs.joinPaths(path, 'authorized_keys'), buffer)
+
+
+def run_qemu_fio_test(cl, ip, server):
+    # make a kvm node
+    ssh = 2222
+    make_kvm(cl, 'nbd-test', ssh, media=[
+        {'url': 'nbd+tcp://%s:%s/default' % (container_ip(server), NBD_CONFIG['port'])},
+    ])
+
+    prefab = j.tools.prefab.getFromSSH(ip, ssh)
+
+    prefab.core.file_write(
+        '/etc/apt/sources.list',
+        'deb http://archive.ubuntu.com/ubuntu/ xenial main universe multiverse restricted'
+    )
+
+    prefab.core.run('apt-get update')
+    prefab.core.run('apt-get install -y fio')
+
+    # upload same fio test file
+    config = j.sal.fs.fileGetContents(j.sal.fs.joinPaths(ROOT, FIO_CONF))
+    config = config.format(dev='vda')
+
+    # upload config
+    cfg = j.sal.fs.joinPaths('/tmp', 'config')
+    prefab.core.file_write(cfg, config)
+
+    code, out, err = prefab.core.run('fio %s' % cfg)
+    if code != 0:
+        raise Exception('failed to start nbd-server: %s' % err)
+
+    j.sal.fs.writeFile(j.sal.fs.joinPaths(ROOT, 'guest-fio.out'), out)
+    logger.info('Host tests written to %s/host-fio.out' % ROOT)
+
+    return prefab
+
+
 DEBUG = False
 
 # Create node on packet.net
 if not DEBUG:
-    cl, node, ip = make_node(MACHINE_NAME)
+    cl, _, ip = make_node(MACHINE_NAME)
+    print("IP", ip)
 else:
     # local defined node
     cl = j.clients.zero_os.get('main')
 
+cl.timeout = 600
 prepare_node(cl)
 # start nbd server
 server = start_base_nbd_server(cl)
 client = start_base_nbd_client(cl, server)
+run_host_fio_test(cl, 'nbd0')
 
-fio = run_fio(cl, 'nbd0')
+prefab = run_qemu_fio_test(cl, ip, server)
