@@ -11,10 +11,10 @@ ROOT = os.path.dirname(os.path.abspath(__file__))
 PACKENTNET_INSTANCE = 'main'
 ZEROTIER_INSTANCE = 'main'
 
-FACILITY = 'fra1'
+FACILITY = 'ams1'
 MACHINE_NAME = 'nbd-baseline'
 RESET = False
-PLAN = 'baremetal_1e'
+PLAN = 'baremetal_1'
 
 # Flists
 FLIST_FIO = 'https://hub.gig.tech/azmy/fio.flist'
@@ -39,7 +39,7 @@ def make_node(name):
     zoscl, node, ip = cl.startZeroOS(
         hostname=name, plan=PLAN, facility=FACILITY,
         zerotierAPI=zt.config.data['token_'], zerotierId=zt.config.data['networkID_'],
-        remove=RESET
+        remove=RESET, params=['debug']
     )
 
     return zoscl, node, ip  # expanded for self documentation
@@ -144,7 +144,7 @@ def start_base_nbd_client(cl, server):
     # find the nbd-server job
     job = list(filter(lambda j: j['cmd']['tags'] is not None and tag in j['cmd']['tags'], container.job.list()))
     if len(job) == 1:
-        return
+        return container
 
     # we always use nbd0
     result = container.system(
@@ -159,6 +159,14 @@ def start_base_nbd_client(cl, server):
         time.sleep(1)
 
     logger.info('NBD-CLIENT JOB ID: %s', result.id)
+    return container
+
+
+def stop_base_nbd_client(container):
+    tag = 'nbd-client'
+    jobs = list(filter(lambda j: j['cmd']['tags'] is not None and tag in j['cmd']['tags'], container.job.list()))
+    for job in jobs:
+        container.job.kill(job['cmd']['id'])
 
 
 def run_host_fio_test(cl, device):
@@ -190,8 +198,8 @@ def run_host_fio_test(cl, device):
     if output.state == 'ERROR':
         raise Exception('fio failed: %s', output.stderr)
 
-    logger.info(output.stdout)
-    j.sal.fs.writeFile(j.sal.fs.joinPaths(ROOT, 'baseline-fio.out'), output.stdout)
+    j.sal.fs.writeFile(j.sal.fs.joinPaths(ROOT, 'host-baseline-fio.out'), output.stdout)
+    logger.info('Hosts tests written to %s/host-baseline-fio.out' % ROOT)
 
 
 def make_kvm(cl, name, ssh=2222, media=None):
@@ -248,8 +256,8 @@ def run_qemu_fio_test(cl, ip, server):
     if code != 0:
         raise Exception('failed to start nbd-server: %s' % err)
 
-    j.sal.fs.writeFile(j.sal.fs.joinPaths(ROOT, 'guest-fio.out'), out)
-    logger.info('Host tests written to %s/host-fio.out' % ROOT)
+    j.sal.fs.writeFile(j.sal.fs.joinPaths(ROOT, 'guest-baseline-fio.out'), out)
+    logger.info('Guest tests written to %s/guest-baseline-fio.out' % ROOT)
 
     return prefab
 
@@ -266,9 +274,21 @@ else:
 
 cl.timeout = 600
 prepare_node(cl)
-# start nbd server
+
+# 1- start nbd server
 server = start_base_nbd_server(cl)
+
+# 2- connect the client
 client = start_base_nbd_client(cl, server)
+
+# 3- run fio test
 run_host_fio_test(cl, 'nbd0')
 
+# 4- stop the client
+stop_base_nbd_client(client)
+
+# 5- make sure server still running
+server = start_base_nbd_server(cl)
+
+# 6- run inside a qemu vm
 prefab = run_qemu_fio_test(cl, ip, server)
